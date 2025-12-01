@@ -11,6 +11,17 @@ use nom::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinOp {
     Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Neq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +65,13 @@ fn parse_expr(input: &str) -> Res<'_, Expr> {
 }
 
 fn parse_let(input: &str) -> Res<'_, Expr> {
+    // let has the lowest precedence
     alt((parse_let_binding, parse_lambda)).parse(input)
+}
+
+fn parse_lambda(input: &str) -> Res<'_, Expr> {
+    // fun / if / everything else (starting at || level)
+    alt((parse_lambda_expr, parse_if, parse_or)).parse(input)
 }
 
 fn parse_if(input: &str) -> Res<'_, Expr> {
@@ -75,23 +92,127 @@ fn parse_if(input: &str) -> Res<'_, Expr> {
         .parse(input)
 }
 
-fn parse_lambda(input: &str) -> Res<'_, Expr> {
-    alt((parse_lambda_expr, parse_add, parse_if)).parse(input)
+/// || (lowest precedence among binary ops)
+fn parse_or(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_and(input)?;
+    fold_many0(
+        pair(ws0(tag("||")), parse_and),
+        move || first.clone(),
+        |left, (_, right)| Expr::BinOp {
+            op: BinOp::Or,
+            left: Box::new(left),
+            right: Box::new(right),
+        },
+    )
+    .parse(rest)
 }
 
-fn parse_lambda_expr(input: &str) -> Res<'_, Expr> {
-    (
-        keyword("fun"),
-        space1,
-        parse_params,
-        ws0(tag("->")),
-        parse_expr,
+/// &&
+fn parse_and(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_eq(input)?;
+    fold_many0(
+        pair(ws0(tag("&&")), parse_eq),
+        move || first.clone(),
+        |left, (_, right)| Expr::BinOp {
+            op: BinOp::And,
+            left: Box::new(left),
+            right: Box::new(right),
+        },
     )
-        .map(|(_, _, params, _, body)| Expr::Lambda {
-            params,
-            body: Box::new(body),
-        })
-        .parse(input)
+    .parse(rest)
+}
+
+/// ==, !=
+fn parse_eq(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_cmp(input)?;
+    fold_many0(
+        pair(ws0(alt((tag("=="), tag("!=")))), parse_cmp),
+        move || first.clone(),
+        |left, (op_str, right)| {
+            let op = match op_str {
+                "==" => BinOp::Eq,
+                "!=" => BinOp::Neq,
+                _ => unreachable!(),
+            };
+            Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        },
+    )
+    .parse(rest)
+}
+
+/// <, <=, >, >=
+fn parse_cmp(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_add(input)?;
+    fold_many0(
+        pair(
+            ws0(alt((tag("<="), tag(">="), tag("<"), tag(">")))),
+            parse_add,
+        ),
+        move || first.clone(),
+        |left, (op_str, right)| {
+            let op = match op_str {
+                "<" => BinOp::Lt,
+                "<=" => BinOp::Le,
+                ">" => BinOp::Gt,
+                ">=" => BinOp::Ge,
+                _ => unreachable!(),
+            };
+            Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        },
+    )
+    .parse(rest)
+}
+
+/// +, -
+fn parse_add(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_mul(input)?;
+    fold_many0(
+        pair(ws0(alt((char('+'), char('-')))), parse_mul),
+        move || first.clone(),
+        |left, (op_ch, right)| {
+            let op = match op_ch {
+                '+' => BinOp::Add,
+                '-' => BinOp::Sub,
+                _ => unreachable!(),
+            };
+            Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        },
+    )
+    .parse(rest)
+}
+
+/// *, /
+fn parse_mul(input: &str) -> Res<'_, Expr> {
+    let (rest, first) = parse_application(input)?;
+    fold_many0(
+        pair(ws0(alt((char('*'), char('/')))), parse_application),
+        move || first.clone(),
+        |left, (op_ch, right)| {
+            let op = match op_ch {
+                '*' => BinOp::Mul,
+                '/' => BinOp::Div,
+                _ => unreachable!(),
+            };
+            Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }
+        },
+    )
+    .parse(rest)
 }
 
 fn parse_let_binding(input: &str) -> Res<'_, Expr> {
@@ -112,18 +233,19 @@ fn parse_let_binding(input: &str) -> Res<'_, Expr> {
         .parse(input)
 }
 
-fn parse_add(input: &str) -> Res<'_, Expr> {
-    let (rest, first) = parse_application(input)?;
-    fold_many0(
-        pair(ws0(char('+')), parse_application),
-        move || first.clone(),
-        |left, (_, right)| Expr::BinOp {
-            op: BinOp::Add,
-            left: Box::new(left),
-            right: Box::new(right),
-        },
+fn parse_lambda_expr(input: &str) -> Res<'_, Expr> {
+    (
+        keyword("fun"),
+        space1,
+        parse_params,
+        ws0(tag("->")),
+        parse_expr,
     )
-    .parse(rest)
+        .map(|(_, _, params, _, body)| Expr::Lambda {
+            params,
+            body: Box::new(body),
+        })
+        .parse(input)
 }
 
 fn parse_application(input: &str) -> Res<'_, Expr> {
@@ -138,7 +260,7 @@ fn parse_application(input: &str) -> Res<'_, Expr> {
 }
 
 fn parse_atom(input: &str) -> Res<'_, Expr> {
-    alt((parse_paren_expr, parse_int, parse_variable, parse_bool)).parse(input)
+    alt((parse_paren_expr, parse_bool, parse_int, parse_variable)).parse(input)
 }
 
 fn parse_paren_expr(input: &str) -> Res<'_, Expr> {
@@ -350,6 +472,141 @@ mod tests {
                     )),
                     Box::new(Expr::Int(3)),
                 )),
+            },
+        );
+    }
+
+    // ---------- Operator & precedence tests ----------
+
+    #[test]
+    fn arithmetic_precedence_mul_higher_than_add() {
+        // 1 + 2 * 3  =>  1 + (2 * 3)
+        assert_parse(
+            "1 + 2 * 3",
+            Expr::BinOp {
+                op: BinOp::Add,
+                left: Box::new(Expr::Int(1)),
+                right: Box::new(Expr::BinOp {
+                    op: BinOp::Mul,
+                    left: Box::new(Expr::Int(2)),
+                    right: Box::new(Expr::Int(3)),
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn arithmetic_left_associative() {
+        // 1 - 2 - 3  =>  (1 - 2) - 3
+        assert_parse(
+            "1 - 2 - 3",
+            Expr::BinOp {
+                op: BinOp::Sub,
+                left: Box::new(Expr::BinOp {
+                    op: BinOp::Sub,
+                    left: Box::new(Expr::Int(1)),
+                    right: Box::new(Expr::Int(2)),
+                }),
+                right: Box::new(Expr::Int(3)),
+            },
+        );
+    }
+
+    #[test]
+    fn application_has_higher_precedence_than_mul() {
+        // f x * 2  =>  (f x) * 2
+        assert_parse(
+            "f x * 2",
+            Expr::BinOp {
+                op: BinOp::Mul,
+                left: Box::new(Expr::App(
+                    Box::new(Expr::Var("f".into())),
+                    Box::new(Expr::Var("x".into())),
+                )),
+                right: Box::new(Expr::Int(2)),
+            },
+        );
+    }
+
+    #[test]
+    fn comparison_has_lower_precedence_than_add() {
+        // 1 + 2 < 3 + 4  =>  (1 + 2) < (3 + 4)
+        assert_parse(
+            "1 + 2 < 3 + 4",
+            Expr::BinOp {
+                op: BinOp::Lt,
+                left: Box::new(Expr::BinOp {
+                    op: BinOp::Add,
+                    left: Box::new(Expr::Int(1)),
+                    right: Box::new(Expr::Int(2)),
+                }),
+                right: Box::new(Expr::BinOp {
+                    op: BinOp::Add,
+                    left: Box::new(Expr::Int(3)),
+                    right: Box::new(Expr::Int(4)),
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn equality_has_lower_precedence_than_comparison() {
+        // x < 3 == y < 4  =>  (x < 3) == (y < 4)
+        assert_parse(
+            "x < 3 == y < 4",
+            Expr::BinOp {
+                op: BinOp::Eq,
+                left: Box::new(Expr::BinOp {
+                    op: BinOp::Lt,
+                    left: Box::new(Expr::Var("x".into())),
+                    right: Box::new(Expr::Int(3)),
+                }),
+                right: Box::new(Expr::BinOp {
+                    op: BinOp::Lt,
+                    left: Box::new(Expr::Var("y".into())),
+                    right: Box::new(Expr::Int(4)),
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn boolean_precedence_and_higher_than_or() {
+        // true && false || true  =>  (true && false) || true
+        assert_parse(
+            "true && false || true",
+            Expr::BinOp {
+                op: BinOp::Or,
+                left: Box::new(Expr::BinOp {
+                    op: BinOp::And,
+                    left: Box::new(Expr::Bool(true)),
+                    right: Box::new(Expr::Bool(false)),
+                }),
+                right: Box::new(Expr::Bool(true)),
+            },
+        );
+    }
+
+    #[test]
+    fn operators_inside_if() {
+        assert_parse(
+            "if x < 3 then 1 + 2 else 3 * 4",
+            Expr::If {
+                cond: Box::new(Expr::BinOp {
+                    op: BinOp::Lt,
+                    left: Box::new(Expr::Var("x".into())),
+                    right: Box::new(Expr::Int(3)),
+                }),
+                then_branch: Box::new(Expr::BinOp {
+                    op: BinOp::Add,
+                    left: Box::new(Expr::Int(1)),
+                    right: Box::new(Expr::Int(2)),
+                }),
+                else_branch: Box::new(Expr::BinOp {
+                    op: BinOp::Mul,
+                    left: Box::new(Expr::Int(3)),
+                    right: Box::new(Expr::Int(4)),
+                }),
             },
         );
     }

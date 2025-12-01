@@ -113,20 +113,29 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
             type_of(body, &extended)
         }
 
-        Expr::BinOp {
-            op: BinOp::Add,
-            left,
-            right,
-        } => {
+        Expr::BinOp { op, left, right } => {
             let left_ty = type_of(left, env)?;
             let right_ty = type_of(right, env)?;
-            if left_ty == Type::Int && right_ty == Type::Int {
-                Ok(Type::Int)
-            } else {
-                Err(format!(
-                    "both sides of + must be int, got {:?} and {:?}",
-                    left_ty, right_ty
-                ))
+
+            match (op, &left_ty, &right_ty) {
+                (BinOp::Add, Type::Int, Type::Int) => Ok(Type::Int),
+                (BinOp::Sub, Type::Int, Type::Int) => Ok(Type::Int),
+                (BinOp::Mul, Type::Int, Type::Int) => Ok(Type::Int),
+                (BinOp::Div, Type::Int, Type::Int) => Ok(Type::Int),
+                (BinOp::Gt, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Lt, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Ge, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Le, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Eq, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Eq, Type::Bool, Type::Bool) => Ok(Type::Bool),
+                (BinOp::Neq, Type::Int, Type::Int) => Ok(Type::Bool),
+                (BinOp::Neq, Type::Bool, Type::Bool) => Ok(Type::Bool),
+                (BinOp::And, Type::Bool, Type::Bool) => Ok(Type::Bool),
+                (BinOp::Or, Type::Bool, Type::Bool) => Ok(Type::Bool),
+                (op, l, r) => Err(format!(
+                    "invalid binary operation {:?} for types {:?} and {:?} ",
+                    op, l, r
+                )),
             }
         }
     }
@@ -146,7 +155,10 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
             match cond_val {
                 Value::Bool(true) => eval(then_branch, env),
                 Value::Bool(false) => eval(else_branch, env),
-                other => Err(format!("trying to apply a non-closure: {:?}", other)),
+                other => Err(format!(
+                    "condition in if must be a bool, got value {:?}",
+                    other
+                )),
             }
         }
 
@@ -189,17 +201,80 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
             eval(body, env)
         }
 
-        Expr::BinOp {
-            op: BinOp::Add,
-            left,
-            right,
-        } => {
-            let lv = eval(left, env)?;
-            let rv = eval(right, env)?;
+        Expr::BinOp { op, left, right } => {
+            use BinOp::*;
+            match op {
+                // short-circuiting boolean ops need special handling:
+                And => {
+                    let lv = eval(left, env)?;
+                    match lv {
+                        Value::Bool(false) => Ok(Value::Bool(false)), // short-circuit
+                        Value::Bool(true) => {
+                            let rv = eval(right, env)?;
+                            match rv {
+                                Value::Bool(b) => Ok(Value::Bool(b)),
+                                other => Err(format!(
+                                    "right operand of && must be bool, got {:?}",
+                                    other
+                                )),
+                            }
+                        }
+                        other => Err(format!("left operand of && must be bool, got {:?}", other)),
+                    }
+                }
+                Or => {
+                    let lv = eval(left, env)?;
+                    match lv {
+                        Value::Bool(true) => Ok(Value::Bool(true)), // short-circuit
+                        Value::Bool(false) => {
+                            let rv = eval(right, env)?;
+                            match rv {
+                                Value::Bool(b) => Ok(Value::Bool(b)),
+                                other => Err(format!(
+                                    "right operand of || must be bool, got {:?}",
+                                    other
+                                )),
+                            }
+                        }
+                        other => Err(format!("left operand of || must be bool, got {:?}", other)),
+                    }
+                }
 
-            match (lv, rv) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                (l, r) => Err(format!("Type error at runtime in +: {:?}, {:?}", l, r)),
+                // everything else can safely evaluate both sides first
+                Add | Sub | Mul | Div | Gt | Lt | Ge | Le | Eq | Neq => {
+                    let lv = eval(left, env)?;
+                    let rv = eval(right, env)?;
+                    match (op, lv, rv) {
+                        // arithmetic
+                        (Add, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                        (Sub, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
+                        (Mul, Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                        (Div, Value::Int(a), Value::Int(b)) => {
+                            if b == 0 {
+                                Err("division by zero".into())
+                            } else {
+                                Ok(Value::Int(a / b))
+                            }
+                        }
+
+                        // comparisons
+                        (Gt, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+                        (Lt, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+                        (Ge, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+                        (Le, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+
+                        // equality / inequality
+                        (Eq, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a == b)),
+                        (Eq, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a == b)),
+                        (Neq, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a != b)),
+                        (Neq, Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a != b)),
+
+                        (op, l, r) => Err(format!(
+                            "invalid operands at runtime for {:?}: {:?} and {:?}",
+                            op, l, r
+                        )),
+                    }
+                }
             }
         }
     }
