@@ -4,6 +4,7 @@ use crate::parser::Expr;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Int,
+    Bool,
     Func(Box<Type>, Box<Type>),
 }
 
@@ -11,6 +12,7 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "int"),
+            Type::Bool => write!(f, "bool"),
             Type::Func(param_type, return_type) => {
                 write!(f, "({} -> {})", param_type, return_type)
             }
@@ -23,6 +25,7 @@ pub type Env = std::collections::HashMap<String, Value>;
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
+    Bool(bool),
     Closure {
         params: Vec<String>,
         body: Box<Expr>,
@@ -35,6 +38,7 @@ pub type TypeEnv = std::collections::HashMap<String, Type>;
 pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
     match expr {
         Expr::Int(_) => Ok(Type::Int),
+        Expr::Bool(_) => Ok(Type::Bool),
 
         Expr::Var(name) => env
             .get(name)
@@ -56,6 +60,28 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
 
             let body_ty = type_of(body, &extended)?;
             Ok(Type::Func(Box::new(param_ty), Box::new(body_ty)))
+        }
+
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            // since this is an expression based languages if statements must always produce a
+            // value. therefore the else is not optional.
+            let cond_type = type_of(cond, env)?;
+            if cond_type != Type::Bool {
+                return Err("condition to if not a boolean".into());
+            }
+
+            let then_branch = type_of(then_branch, env)?;
+            let else_branch = type_of(else_branch, env)?;
+
+            if else_branch != then_branch {
+                return Err("if statement branches return different values".into());
+            }
+
+            Ok(then_branch)
         }
 
         Expr::App(func, arg) => {
@@ -109,6 +135,20 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
 pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
     match expr {
         Expr::Int(n) => Ok(Value::Int(*n)),
+        Expr::Bool(b) => Ok(Value::Bool(*b)),
+
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            let cond_val = eval(cond, env)?;
+            match cond_val {
+                Value::Bool(true) => eval(then_branch, env),
+                Value::Bool(false) => eval(else_branch, env),
+                other => Err(format!("trying to apply a non-closure: {:?}", other)),
+            }
+        }
 
         Expr::Var(name) => env
             .get(name)

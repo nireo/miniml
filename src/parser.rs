@@ -16,7 +16,13 @@ pub enum BinOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Var(String),
+    Bool(bool),
     Int(i64),
+    If {
+        cond: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+    },
     Lambda {
         params: Vec<String>,
         body: Box<Expr>,
@@ -51,8 +57,26 @@ fn parse_let(input: &str) -> Res<'_, Expr> {
     alt((parse_let_binding, parse_lambda)).parse(input)
 }
 
+fn parse_if(input: &str) -> Res<'_, Expr> {
+    (
+        keyword("if"),
+        space1,
+        parse_expr,
+        ws0(keyword("then")),
+        parse_expr,
+        ws0(keyword("else")),
+        parse_expr,
+    )
+        .map(|(_, _, cond, _, then_branch, _, else_branch)| Expr::If {
+            cond: Box::new(cond),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+        })
+        .parse(input)
+}
+
 fn parse_lambda(input: &str) -> Res<'_, Expr> {
-    alt((parse_lambda_expr, parse_add)).parse(input)
+    alt((parse_lambda_expr, parse_add, parse_if)).parse(input)
 }
 
 fn parse_lambda_expr(input: &str) -> Res<'_, Expr> {
@@ -114,7 +138,7 @@ fn parse_application(input: &str) -> Res<'_, Expr> {
 }
 
 fn parse_atom(input: &str) -> Res<'_, Expr> {
-    alt((parse_paren_expr, parse_int, parse_variable)).parse(input)
+    alt((parse_paren_expr, parse_int, parse_variable, parse_bool)).parse(input)
 }
 
 fn parse_paren_expr(input: &str) -> Res<'_, Expr> {
@@ -144,6 +168,14 @@ fn parse_int(input: &str) -> Res<'_, Expr> {
     .parse(input)
 }
 
+fn parse_bool(input: &str) -> Res<'_, Expr> {
+    alt((
+        value(Expr::Bool(true), keyword("true")),
+        value(Expr::Bool(false), keyword("false")),
+    ))
+    .parse(input)
+}
+
 fn identifier(input: &str) -> Res<'_, String> {
     map(
         verify(
@@ -163,7 +195,10 @@ fn keyword<'a>(kw: &'static str) -> impl Parser<&'a str, Output = &'a str, Error
 }
 
 fn matches_keyword(s: &str) -> bool {
-    matches!(s, "let" | "in" | "fun")
+    matches!(
+        s,
+        "let" | "in" | "fun" | "if" | "then" | "else" | "true" | "false"
+    )
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -278,6 +313,42 @@ mod tests {
                 body: Box::new(Expr::App(
                     Box::new(Expr::Var("id".into())),
                     Box::new(Expr::Int(5)),
+                )),
+            },
+        );
+    }
+
+    #[test]
+    fn parses_bools() {
+        assert_parse("true", Expr::Bool(true));
+        assert_parse("false", Expr::Bool(false));
+    }
+
+    #[test]
+    fn parses_if_expressions() {
+        assert_parse(
+            "if true then 1 else 2",
+            Expr::If {
+                cond: Box::new(Expr::Bool(true)),
+                then_branch: Box::new(Expr::Int(1)),
+                else_branch: Box::new(Expr::Int(2)),
+            },
+        );
+
+        assert_parse(
+            "if x then f 1 else g 2 3",
+            Expr::If {
+                cond: Box::new(Expr::Var("x".into())),
+                then_branch: Box::new(Expr::App(
+                    Box::new(Expr::Var("f".into())),
+                    Box::new(Expr::Int(1)),
+                )),
+                else_branch: Box::new(Expr::App(
+                    Box::new(Expr::App(
+                        Box::new(Expr::Var("g".into())),
+                        Box::new(Expr::Int(2)),
+                    )),
+                    Box::new(Expr::Int(3)),
                 )),
             },
         );
