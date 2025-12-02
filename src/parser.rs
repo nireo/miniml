@@ -476,8 +476,6 @@ mod tests {
         );
     }
 
-    // ---------- Operator & precedence tests ----------
-
     #[test]
     fn arithmetic_precedence_mul_higher_than_add() {
         // 1 + 2 * 3  =>  1 + (2 * 3)

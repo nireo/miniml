@@ -20,6 +20,42 @@ impl std::fmt::Display for Type {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evals_multi_argument_function_via_currying() {
+        let expr = Expr::Let {
+            name: "add".into(),
+            value: Box::new(Expr::Lambda {
+                params: vec!["x".into(), "y".into()],
+                body: Box::new(Expr::BinOp {
+                    op: BinOp::Add,
+                    left: Box::new(Expr::Var("x".into())),
+                    right: Box::new(Expr::Var("y".into())),
+                }),
+            }),
+            body: Box::new(Expr::App(
+                Box::new(Expr::App(
+                    Box::new(Expr::Var("add".into())),
+                    Box::new(Expr::Int(2)),
+                )),
+                Box::new(Expr::Int(3)),
+            )),
+        };
+
+        let mut env = Env::new();
+        match eval(&expr, &mut env) {
+            Ok(Value::Int(result)) => assert_eq!(result, 5),
+            other => panic!("unexpected eval result: {:?}", other),
+        }
+
+        let ty = type_of(&expr, &TypeEnv::new()).expect("type inference failed");
+        assert_eq!(ty, Type::Int);
+    }
+}
+
 pub type Env = std::collections::HashMap<String, Value>;
 
 #[derive(Debug, Clone)]
@@ -46,20 +82,23 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
             .ok_or_else(|| format!("Unbound variable: {name}")),
 
         Expr::Lambda { params, body } => {
-            // TODO: handle multiple parameters
-            if params.len() != 1 {
-                return Err("Only single-argument lambdas supported in this demo".into());
+            if params.is_empty() {
+                return Err("Lambda must have at least one parameter".into());
             }
-
-            let param_name = &params[0];
 
             let param_ty = Type::Int;
 
             let mut extended = env.clone();
-            extended.insert(param_name.clone(), param_ty.clone());
-
+            for name in params {
+                extended.insert(name.clone(), param_ty.clone());
+            }
             let body_ty = type_of(body, &extended)?;
-            Ok(Type::Func(Box::new(param_ty), Box::new(body_ty)))
+
+            let mut ty = body_ty;
+            for _ in params.iter().rev() {
+                ty = Type::Func(Box::new(param_ty.clone()), Box::new(ty));
+            }
+            Ok(ty)
         }
 
         Expr::If {
@@ -183,13 +222,22 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                     body,
                     mut env,
                 } => {
-                    if params.len() != 1 {
-                        return Err("only single-arg functions supported".into());
-                    }
-                    let param_name = &params[0];
+                    let (param_name, rest) =
+                        params
+                            .split_first()
+                            .ok_or_else(|| "cannot apply a function with no parameters".to_string())?;
 
                     env.insert(param_name.clone(), arg_val);
-                    eval(&body, &mut env)
+
+                    if rest.is_empty() {
+                        eval(&body, &mut env)
+                    } else {
+                        Ok(Value::Closure {
+                            params: rest.to_vec(),
+                            body,
+                            env,
+                        })
+                    }
                 }
                 other => Err(format!("trying to apply a non-closure: {:?}", other)),
             }
