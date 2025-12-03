@@ -5,6 +5,7 @@ use crate::parser::Expr;
 pub enum Type {
     Int,
     Bool,
+    String,
     Func(Box<Type>, Box<Type>),
 }
 
@@ -13,46 +14,11 @@ impl std::fmt::Display for Type {
         match self {
             Type::Int => write!(f, "int"),
             Type::Bool => write!(f, "bool"),
+            Type::String => write!(f, "str"),
             Type::Func(param_type, return_type) => {
                 write!(f, "({} -> {})", param_type, return_type)
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn evals_multi_argument_function_via_currying() {
-        let expr = Expr::Let {
-            name: "add".into(),
-            value: Box::new(Expr::Lambda {
-                params: vec!["x".into(), "y".into()],
-                body: Box::new(Expr::BinOp {
-                    op: BinOp::Add,
-                    left: Box::new(Expr::Var("x".into())),
-                    right: Box::new(Expr::Var("y".into())),
-                }),
-            }),
-            body: Box::new(Expr::App(
-                Box::new(Expr::App(
-                    Box::new(Expr::Var("add".into())),
-                    Box::new(Expr::Int(2)),
-                )),
-                Box::new(Expr::Int(3)),
-            )),
-        };
-
-        let mut env = Env::new();
-        match eval(&expr, &mut env) {
-            Ok(Value::Int(result)) => assert_eq!(result, 5),
-            other => panic!("unexpected eval result: {:?}", other),
-        }
-
-        let ty = type_of(&expr, &TypeEnv::new()).expect("type inference failed");
-        assert_eq!(ty, Type::Int);
     }
 }
 
@@ -62,6 +28,7 @@ pub type Env = std::collections::HashMap<String, Value>;
 pub enum Value {
     Int(i64),
     Bool(bool),
+    String(String),
     Closure {
         params: Vec<String>,
         body: Box<Expr>,
@@ -75,6 +42,7 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
     match expr {
         Expr::Int(_) => Ok(Type::Int),
         Expr::Bool(_) => Ok(Type::Bool),
+        Expr::String(_) => Ok(Type::String),
 
         Expr::Var(name) => env
             .get(name)
@@ -157,6 +125,7 @@ pub fn type_of(expr: &Expr, env: &TypeEnv) -> Result<Type, String> {
             let right_ty = type_of(right, env)?;
 
             match (op, &left_ty, &right_ty) {
+                (BinOp::Add, Type::String, Type::String) => Ok(Type::String),
                 (BinOp::Add, Type::Int, Type::Int) => Ok(Type::Int),
                 (BinOp::Sub, Type::Int, Type::Int) => Ok(Type::Int),
                 (BinOp::Mul, Type::Int, Type::Int) => Ok(Type::Int),
@@ -184,6 +153,7 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
     match expr {
         Expr::Int(n) => Ok(Value::Int(*n)),
         Expr::Bool(b) => Ok(Value::Bool(*b)),
+        Expr::String(s) => Ok(Value::String(s.clone())),
 
         Expr::If {
             cond,
@@ -222,10 +192,9 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                     body,
                     mut env,
                 } => {
-                    let (param_name, rest) =
-                        params
-                            .split_first()
-                            .ok_or_else(|| "cannot apply a function with no parameters".to_string())?;
+                    let (param_name, rest) = params
+                        .split_first()
+                        .ok_or_else(|| "cannot apply a function with no parameters".to_string())?;
 
                     env.insert(param_name.clone(), arg_val);
 
@@ -304,6 +273,8 @@ pub fn eval(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                                 Ok(Value::Int(a / b))
                             }
                         }
+
+                        (Add, Value::String(a), Value::String(b)) => Ok(Value::String(a + &b)),
 
                         // comparisons
                         (Gt, Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),

@@ -1,7 +1,7 @@
 use nom::{
     IResult, Parser,
     branch::alt,
-    bytes::complete::tag,
+    bytes::complete::{tag, take_until},
     character::complete::{char, digit1, multispace1, not_line_ending, satisfy},
     combinator::{all_consuming, map, not, opt, peek, recognize, value, verify},
     multi::{fold_many0, many0, many1, separated_list1},
@@ -27,6 +27,7 @@ pub enum BinOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Var(String),
+    String(String),
     Bool(bool),
     Int(i64),
     If {
@@ -260,7 +261,14 @@ fn parse_application(input: &str) -> Res<'_, Expr> {
 }
 
 fn parse_atom(input: &str) -> Res<'_, Expr> {
-    alt((parse_paren_expr, parse_bool, parse_int, parse_variable)).parse(input)
+    alt((
+        parse_paren_expr,
+        parse_bool,
+        parse_int,
+        parse_variable,
+        parse_string,
+    ))
+    .parse(input)
 }
 
 fn parse_paren_expr(input: &str) -> Res<'_, Expr> {
@@ -295,6 +303,14 @@ fn parse_bool(input: &str) -> Res<'_, Expr> {
         value(Expr::Bool(true), keyword("true")),
         value(Expr::Bool(false), keyword("false")),
     ))
+    .parse(input)
+}
+
+fn parse_string(input: &str) -> Res<'_, Expr> {
+    map(
+        delimited(char('"'), take_until("\""), char('"')),
+        |v: &str| Expr::String(v.into()),
+    )
     .parse(input)
 }
 
